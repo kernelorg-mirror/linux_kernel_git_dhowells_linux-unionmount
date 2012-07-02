@@ -267,6 +267,7 @@ void deactivate_locked_super(struct super_block *s)
 		 */
 		rcu_barrier();
 		put_filesystem(fs);
+		put_union_sb(s);
 		put_super(s);
 	} else {
 		up_write(&s->s_umount);

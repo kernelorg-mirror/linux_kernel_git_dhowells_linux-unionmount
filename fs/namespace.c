@@ -1408,9 +1408,9 @@ static int invent_group_ids(struct mount *mnt, bool recurse)
  * fallthrus.  The topmost file system can't be mounted elsewhere
  * because it's Too Hard(tm).
  */
-static int check_topmost_union_mnt(struct vfsmount *topmost_mnt, int mnt_flags)
+static int check_topmost_union_mnt(struct mount *topmost_mnt, int mnt_flags)
 {
-	struct super_block *sb = topmost_mnt->mnt_sb;
+	struct super_block *sb = topmost_mnt->mnt.mnt_sb;
 
 #ifndef CONFIG_UNION_MOUNT
 	printk(KERN_INFO "union mount: not supported by the kernel\n");
@@ -1513,7 +1513,7 @@ static int clone_union_tree(struct mount *topmost, struct path *mntpnt)
  * union "up" from the root of the cloned tree to find the topmost read-only
  * mount, and then traverse back "down" to build the stack.
  */
-static int build_root_union(struct vfsmount *topmost_mnt)
+static int build_root_union(struct mount *topmost_mnt)
 {
 	struct path lower, topmost_path;
 	struct mount *mnt, *topmost_ro_mnt;
@@ -1521,7 +1521,7 @@ static int build_root_union(struct vfsmount *topmost_mnt)
 	int err = 0;
 
 	/* Find the topmost read-only mount */
-	topmost_ro_mnt = real_mount(topmost_mnt->mnt_sb->s_union_lower_mnts);
+	topmost_ro_mnt = real_mount(topmost_mnt->mnt.mnt_sb->s_union_lower_mnts);
 	for (mnt = topmost_ro_mnt; mnt; mnt = next_mnt(mnt, topmost_ro_mnt)) {
 		if (mnt->mnt_parent == topmost_ro_mnt &&
 		    mnt->mnt_mountpoint == topmost_ro_mnt->mnt.mnt_root) {
@@ -1529,13 +1529,13 @@ static int build_root_union(struct vfsmount *topmost_mnt)
 			layers++;
 		}
 	}
-	topmost_mnt->mnt_sb->s_union_count = layers;
+	topmost_mnt->mnt.mnt_sb->s_union_count = layers;
 
 	// SHOULD USE collect_mounts() here rather than merely mntgetting
 
 	/* Build the root dir's union stack from the top down */
-	topmost_path.mnt = topmost_mnt;
-	topmost_path.dentry = topmost_mnt->mnt_root;
+	topmost_path.mnt = &topmost_mnt->mnt;
+	topmost_path.dentry = topmost_mnt->mnt.mnt_root;
 	mnt = topmost_ro_mnt;
 	for (i = 0; i < layers; i++) {
 		lower.mnt = mntget(&mnt->mnt); // !!!!!!!!!! TODO: FIX
@@ -1549,7 +1549,7 @@ static int build_root_union(struct vfsmount *topmost_mnt)
 
 out:
 	d_free_unions(topmost_path.dentry);
-	topmost_mnt->mnt_sb->s_union_count = 0;
+	topmost_mnt->mnt.mnt_sb->s_union_count = 0;
 	return err;
 }
 
@@ -1565,15 +1565,15 @@ out:
  *
  * Caller needs namespace_sem, but can't have vfsmount_lock.
  */
-static int prepare_mnt_union(struct vfsmount *topmost_mnt, struct path *mntpnt)
+static int prepare_mnt_union(struct mount *topmost_mnt, struct path *mntpnt)
 {
 	int err;
 
-	err = check_topmost_union_mnt(topmost_mnt, topmost_mnt->mnt_flags);
+	err = check_topmost_union_mnt(topmost_mnt, topmost_mnt->mnt.mnt_flags);
 	if (err)
 		return err;
 
-	err = clone_union_tree(real_mount(topmost_mnt), mntpnt);
+	err = clone_union_tree(topmost_mnt, mntpnt);
 	if (err)
 		return err;
 
@@ -1583,14 +1583,14 @@ static int prepare_mnt_union(struct vfsmount *topmost_mnt, struct path *mntpnt)
 	return 0;
 
 out:
-	put_union_sb(topmost_mnt->mnt_sb);
+	put_union_sb(topmost_mnt->mnt.mnt_sb);
 	return err;
 }
 
-static void cleanup_mnt_union(struct vfsmount *topmost_mnt)
+static void cleanup_mnt_union(struct mount *topmost_mnt)
 {
-	d_free_unions(topmost_mnt->mnt_root);
-	put_union_sb(topmost_mnt->mnt_sb);
+	d_free_unions(topmost_mnt->mnt.mnt_root);
+	put_union_sb(topmost_mnt->mnt.mnt_sb);
 }
 
 /*
@@ -1670,9 +1670,17 @@ static int attach_recursive_mnt(struct mount *source_mnt,
 		if (err)
 			goto out;
 	}
+
+	/* parent_path means we are moving an existing unioned mount */
+	if (!parent_path && IS_MNT_UNION(&source_mnt->mnt)) {
+		err = prepare_mnt_union(source_mnt, path);
+		if (err)
+			goto out_cleanup_ids;
+	}
+
 	err = propagate_mnt(dest_mnt, dest_dentry, source_mnt, &tree_list);
 	if (err)
-		goto out_cleanup_ids;
+		goto out_cleanup_union;
 
 	br_write_lock(&vfsmount_lock);
 
@@ -1697,6 +1705,9 @@ static int attach_recursive_mnt(struct mount *source_mnt,
 
 	return 0;
 
+ out_cleanup_union:
+	if (!parent_path && IS_MNT_UNION(&source_mnt->mnt))
+		cleanup_mnt_union(source_mnt);
  out_cleanup_ids:
 	if (IS_MNT_SHARED(dest_mnt))
 		cleanup_group_ids(source_mnt, NULL);
