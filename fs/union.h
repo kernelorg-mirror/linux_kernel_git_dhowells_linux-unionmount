@@ -19,6 +19,7 @@
 #include <linux/mount.h>
 #include <linux/dcache.h>
 #include <linux/path.h>
+#include <linux/bug.h>
 
 /*
  * WARNING! Confusing terminology alert.
@@ -49,5 +50,21 @@
 struct union_stack {
 	struct path u_dirs[0];
 };
+
+static inline
+struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
+{
+	BUG_ON(layer >= dentry->d_sb->s_union_count);
+	return &dentry->d_union_stack->u_dirs[layer];
+}
+
+#else /* CONFIG_UNION_MOUNT */
+
+static inline
+struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
+{
+	BUG();
+	return NULL;
+}
 
 #endif	/* CONFIG_UNION_MOUNT */
