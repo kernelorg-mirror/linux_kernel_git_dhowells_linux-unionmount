@@ -1179,6 +1179,8 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 		 * layer's directory to the union stack for the topmost
 		 * directory.
 		 */
+		follow_mount(&lower);
+
 		if (!topmost->dentry->d_inode) {
 			err = union_create_topmost_dir(&parent, name, topmost,
 						       &lower);
