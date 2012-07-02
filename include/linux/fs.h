@@ -1462,6 +1462,7 @@ struct super_block {
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
 	unsigned char		s_dirt;
 	unsigned char		s_blocksize_bits;
+	u8			s_lock_class;	/* Set of lock classes to use */
 	unsigned long		s_blocksize;
 	loff_t			s_maxbytes;	/* Max file size */
 	struct file_system_type	*s_type;
@@ -1911,8 +1912,8 @@ struct file_system_type {
 	struct lock_class_key s_vfs_rename_key;
 
 	struct lock_class_key i_lock_key;
-	struct lock_class_key i_mutex_key;
-	struct lock_class_key i_mutex_dir_key;
+	struct lock_class_key i_mutex_key[2];
+	struct lock_class_key i_mutex_dir_key[2];
 };
 
 extern struct dentry *mount_ns(struct file_system_type *fs_type, int flags,
