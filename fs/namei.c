@@ -1095,17 +1095,13 @@ static struct dentry *__lookup_hash(struct qstr *name, struct dentry *base,
  * directory, build its union stack.  @topmost is the path of the target in the
  * topmost layer of the union file system.  It is either a directory or a
  * negative (non-whiteout) dentry.
- *
- * This function may stomp nd->path with the path of the parent directory of
- * the lower layers, so the caller must save nd->path and restore it
- * afterwards.
  */
 static int __lookup_union(struct nameidata *nd, struct qstr *name,
 			  struct path *topmost)
 {
 	struct path lower, parent = nd->path;
-	struct path *path;
 	unsigned i, layers = parent.dentry->d_sb->s_union_count;
+	loff_t size;
 	int err;
 
 	if (!topmost->dentry->d_inode) {
@@ -1132,15 +1128,15 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 		/* Get the parent directory for this layer and lookup
 		 * the target in it.
 		 */
-		path = union_find_dir(parent.dentry, i);
-		if (!path->mnt)
+		struct path *lower_parent = union_find_dir(parent.dentry, i);
+		if (!lower_parent->mnt)
 			continue;
 
-		nd->path = *path;
-		lower.mnt = mntget(nd->path.mnt);
-		mutex_lock(&nd->path.dentry->d_inode->i_mutex);
-		lower.dentry = __lookup_hash(name, nd->path.dentry, nd->flags);
-		mutex_unlock(&nd->path.dentry->d_inode->i_mutex);
+		lower.mnt = mntget(lower_parent->mnt);
+		mutex_lock(&lower_parent->dentry->d_inode->i_mutex);
+		lower.dentry = __lookup_hash(name, lower_parent->dentry,
+					     nd->flags);
+		mutex_unlock(&lower_parent->dentry->d_inode->i_mutex);
 
 		if (IS_ERR(lower.dentry)) {
 			mntput(lower.mnt);
@@ -1156,7 +1152,7 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 		if (!lower.dentry->d_inode) {
 			if (d_is_whiteout(lower.dentry))
 				goto out_lookup_done;
-			if (IS_OPAQUE(nd->path.dentry->d_inode) &&
+			if (IS_OPAQUE(lower_parent->dentry->d_inode) &&
 			    !d_is_fallthru(lower.dentry))
 				goto out_lookup_done;
 			path_put(&lower);
@@ -1171,19 +1167,24 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 			if (topmost->dentry->d_inode &&
 			    S_ISDIR(topmost->dentry->d_inode->i_mode))
 				goto out_lookup_done;
-			goto out_found_file;
+			goto out_found_lower_file;
 		}
+
+		/* Mountpoints and automount points on a lowerfs just confuse
+		 * everything, so refuse to handle them for the moment.
+		 */
+		err = -EXDEV;
+		if (unlikely(d_mountpoint(lower.dentry)))
+			goto out_err;
+		err = -EREMOTE;
+		if (unlikely(d_managed(lower.dentry)))
+			goto out_err;
 
 		/* Now we know the target is a directory.  Create a matching
 		 * topmost directory if one doesn't already exist, and add this
 		 * layer's directory to the union stack for the topmost
 		 * directory.
 		 */
-#warning what if the directory is managed?
-#warning should we d_revalidate the lower dentry?
-#warning how to handle automounts?
-		follow_mount(&lower);
-
 		if (!topmost->dentry->d_inode) {
 			err = union_create_topmost_dir(&parent, name, topmost,
 						       &lower);
@@ -1197,27 +1198,62 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 	}
 	return 0;
 
-out_found_file:
-	/* If the caller demands a top-level dentry then we have to copy up. */
-	if (nd->flags & LOOKUP_COPY_UP) {
-		nd->path = parent;
-		err = union_copyup_file(nd, &lower, topmost->dentry,
-					i_size_read(lower.dentry->d_inode));
-		if (err)
+out_found_lower_file:
+	/* If the lower file is a special file, or caller isn't intending to
+	 * write or make modifications, then we can just return the lower file.
+	 */
+	if (!S_ISREG(lower.dentry->d_inode->i_mode) &&
+	    !S_ISLNK(lower.dentry->d_inode->i_mode))
+		goto out_move_down;
+
+	if (!(nd->flags & LOOKUP_COPY_UP))
+		goto out_move_down;
+
+	if (S_ISLNK(lower.dentry->d_inode->i_mode) &&
+	    nd->flags & (LOOKUP_PARENT | LOOKUP_FOLLOW))
+		goto out_move_down;
+
+	/* The caller demands a top-level dentry so we have to copy up.
+	 * However, if the caller wanted to create a file only if one didn't
+	 * exist, then we deny them if one exists lower down.
+	 */
+	err = -EEXIST;
+	if (nd->flags & LOOKUP_EXCL)
+		goto out_err; /* O_CREAT|O_EXCL */
+
+	/* If the caller wants to truncate the file as they open it, just don't
+	 * bother copying up the data.  We also refuse at this time to copy
+	 * really huge files.
+	 *
+	 * NOTE!  We have to make sure the user would have permission to write
+	 * to the file on the lower fs otherwise we let people arbitrarily
+	 * truncate files they shouldn't be able to.
+	 */
+	size = 0;
+	if (!(nd->flags & LOOKUP_COPY_UP_TRUNC)) {
+		size = i_size_read(lower.dentry->d_inode);
+		err = -EFBIG;
+		if ((ssize_t)size != size)
 			goto out_err;
-		goto out_lookup_done;
 	}
 
-	/* Swap out the positive lower dentry with the negative upper
-	 * dentry for this file.  Note that the matching mntput() is done
-	 * in link_path_walk().
-	 */
-	dput(topmost->dentry);
-	*topmost = lower;
-	return 0;
+	if (nd->flags & (LOOKUP_COPY_UP_TRUNC | LOOKUP_OPEN | LOOKUP_CREATE)) {
+		err = __inode_permission(lower.dentry->d_inode, MAY_WRITE);
+		if (err < 0)
+			goto out_err;
+	}
+
+	err = union_copyup_file(nd, &lower, topmost->dentry, size);
+	if (err)
+		goto out_err;
 
 out_lookup_done:
 	path_put(&lower);
+	return 0;
+
+out_move_down:
+	dput(topmost->dentry);
+	*topmost = lower;
 	return 0;
 
 out_err:
@@ -1246,7 +1282,6 @@ out_err:
 static int lookup_union_locked(struct nameidata *nd, struct qstr *name,
 			       struct path *topmost)
 {
-	struct path saved_path;
 	int err;
 
 	BUG_ON(!IS_MNT_UNION(nd->path.mnt) && !IS_MNT_UNION(topmost->mnt));
@@ -1259,11 +1294,7 @@ static int lookup_union_locked(struct nameidata *nd, struct qstr *name,
 	if (topmost->dentry->d_flags & DCACHE_UNION_LOOKUP_DONE)
 		return 0;
 
-	saved_path = nd->path;
-
 	err = __lookup_union(nd, name, topmost);
-
-	nd->path = saved_path;
 
 	/* XXX move into dcache.h */
 	spin_lock(&topmost->dentry->d_lock);
@@ -1406,7 +1437,7 @@ static bool lookup_union_rcu(struct nameidata *nd,
 		if (S_ISDIR((*inode)->i_mode))
 			return false;
 
-		/* We have a file in a lower fs that we can use */
+		/* There is a file in a lower fs that we can use */
 		if (read_seqcount_retry(&lower_dir->d_seq, ldseq) ||
 		    __read_seqcount_retry(&parent->d_seq, parent_seq))
 			return false;
@@ -1418,7 +1449,7 @@ static bool lookup_union_rcu(struct nameidata *nd,
 	}
 
 	/* Found nothing, so just use the top negative dentry */
-	return dentry;
+	return true;
 }
 
 /*
@@ -1630,6 +1661,7 @@ static int lookup_slow(struct nameidata *nd, struct qstr *name,
 	mutex_lock(&parent->d_inode->i_mutex);
 	dentry = __lookup_hash(name, parent, nd->flags);
 	mutex_unlock(&parent->d_inode->i_mutex);
+
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 	path->mnt = nd->path.mnt;
@@ -1641,6 +1673,13 @@ static int lookup_slow(struct nameidata *nd, struct qstr *name,
 	}
 	if (err)
 		nd->flags |= LOOKUP_JUMPED;
+	if (needs_lookup_union(nd, &nd->path, path)) {
+		err = lookup_union(nd, name, path);
+		if (err < 0) {
+			path_put_conditional(path, nd);
+			return err;
+		}
+	}
 	return 0;
 }
 
@@ -1706,6 +1745,7 @@ static inline int walk_component(struct nameidata *nd, struct path *path,
 {
 	struct inode *inode;
 	int err;
+
 	/*
 	 * "." and ".." are special - ".." especially so because it has
 	 * to be able to know about the current root directory and
@@ -1724,6 +1764,7 @@ static inline int walk_component(struct nameidata *nd, struct path *path,
 
 		inode = path->dentry->d_inode;
 	}
+
 	err = -ENOENT;
 	if (!inode)
 		goto out_path_put;
@@ -2850,10 +2891,14 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 	if (!need_lookup && dentry->d_inode)
 		goto out_no_open;
 
-	if ((nd->flags & LOOKUP_OPEN) && dir_inode->i_op->atomic_open) {
+	/* Perform an atomic open if that is available - but not if a file on
+	 * the upper filesystem of a union is being opened for writing
+	 */
+	if ((nd->flags & LOOKUP_OPEN) && dir_inode->i_op->atomic_open &&
+	    !(IS_MNT_UNION(nd->path.mnt) &&
+	      op->acc_mode & (MAY_WRITE | MAY_APPEND)))
 		return atomic_open(nd, dentry, path, file, op, want_write,
 				   need_lookup, opened);
-	}
 
 	if (need_lookup) {
 		BUG_ON(dentry->d_inode);
@@ -2868,8 +2913,8 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 		umode_t mode = op->mode;
 		if (!IS_POSIXACL(dir->d_inode))
 			mode &= ~current_umask();
-		/*
-		 * This write is needed to ensure that a
+
+		/* This write is needed to ensure that a
 		 * rw->ro transition does not occur between
 		 * the time when the file is created and when
 		 * a permanent write count is taken through
@@ -2879,6 +2924,59 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 		if (error)
 			goto out_dput;
 		*want_write = true;
+
+		/* If the negative dentry is on the upper layer of a union
+		 * mount then we may need to copy up or turn a whiteout into a
+		 * file.  The negative dentry will not be on a lower layer at
+		 * this point.
+		 *
+		 * If the dentry is a whiteout or a normal negative dentry in
+		 * an opaque directory then we can just create over it.
+		 *
+		 * If O_CREAT|O_TRUNC|O_EXCL is specified then we fail if
+		 * there's a file in the lower layer or succeed without copying
+		 * up otherwise.
+		 *
+		 * If O_CREAT|O_TRUNC is specified then we need to copy up the
+		 * attributes if there's a lower file.
+		 *
+		 * If O_CREAT|O_RDONLY is specified and the file exists in the
+		 * lower layer, we just use the lower file.
+		 *
+		 * Otherwise we need to copy up the whole file.
+		 */
+		if (IS_MNT_UNION(nd->path.mnt)) {
+			struct path topmost;
+
+			if (d_is_whiteout(dentry) ||
+			    (IS_OPAQUE(dir_inode) && !d_is_fallthru(dentry)))
+				goto just_create; /* Lower is blocked off */
+
+			/* Look up the lower file.  This copies up if
+			 * appropriate, but if the file is opened read-only
+			 * with just O_CREAT then it'll return the lower file.
+			 */
+			topmost.mnt = nd->path.mnt;
+			topmost.dentry = dentry;
+			error = __lookup_union(nd, &dentry->d_name, &topmost);
+			if (error)
+				goto out_dput;
+
+			if (topmost.mnt != nd->path.mnt) {
+				path->mnt = topmost.mnt;
+				path->dentry = topmost.dentry;
+				return 1;
+			}
+			BUG_ON(topmost.dentry != dentry);
+
+			if (dentry->d_inode) {
+				if (S_ISREG(dentry->d_inode->i_mode))
+					*opened |= FILE_COPIED_UP;
+				goto out_no_open;
+			}
+		}
+
+	just_create:
 		*opened |= FILE_CREATED;
 		error = security_path_mknod(&nd->path, dentry, mode, 0);
 		if (error)
@@ -2887,7 +2985,23 @@ static int lookup_open(struct nameidata *nd, struct path *path,
 				   nd->flags & LOOKUP_EXCL);
 		if (error)
 			goto out_dput;
+	} else if (!dentry->d_inode && IS_DIR_UNIONED(dir)) {
+		/* The file does not exist in the top layer of a union - but it
+		 * might exist in a lower layer.
+		 */
+		if (d_is_whiteout(dentry) ||
+		    (IS_OPAQUE(dir_inode) && !d_is_fallthru(dentry)))
+			goto out_no_open; /* Lower is blocked off */
+
+		/* Look up the lower file - this does any necessary copying up */
+		path->mnt = nd->path.mnt;
+		path->dentry = dentry;
+		error = __lookup_union(nd, &dentry->d_name, path);
+		if (error)
+			goto out_dput;
+		return 1;
 	}
+
 out_no_open:
 	path->dentry = dentry;
 	path->mnt = nd->path.mnt;
@@ -2993,11 +3107,23 @@ retry_lookup:
 		goto opened;
 	}
 
+	/* At this point, the file may have been looked up and created or
+	 * truncated but hasn't been opened yet - however, since we dropped the
+	 * lock, things may have changed in the filesystem.
+	 */
 	if (*opened & FILE_CREATED) {
 		/* Don't check for write permission, don't truncate */
 		open_flag &= ~O_TRUNC;
 		will_truncate = false;
 		acc_mode = MAY_OPEN;
+		path_to_nameidata(path, nd);
+		goto finish_open_created;
+	}
+
+	if (*opened & FILE_COPIED_UP) {
+		/* Truncation was dealt with during copy up */
+		open_flag &= ~O_TRUNC;
+		will_truncate = false;
 		path_to_nameidata(path, nd);
 		goto finish_open_created;
 	}
@@ -3064,6 +3190,7 @@ finish_lookup:
 		path_put(&save_parent);
 		return error;
 	}
+
 	error = -EISDIR;
 	if ((open_flag & O_CREAT) && S_ISDIR(nd->inode->i_mode))
 		goto out;
@@ -3152,6 +3279,11 @@ static struct file *path_openat(int dfd, const char *pathname,
 		return ERR_PTR(-ENFILE);
 
 	file->f_flags = op->open_flag;
+
+	if (op->acc_mode & (MAY_WRITE | MAY_APPEND))
+		flags |= LOOKUP_COPY_UP;
+	if (op->open_flag & O_TRUNC)
+		flags |= LOOKUP_COPY_UP | LOOKUP_COPY_UP_TRUNC;
 
 	error = path_init(dfd, pathname, flags | LOOKUP_PARENT, nd, &base);
 	if (unlikely(error))

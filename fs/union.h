@@ -74,11 +74,10 @@ extern int union_create_topmost_dir(struct path *, struct qstr *, struct path *,
 extern int union_copyup_dir(struct path *);
 extern int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
 				    int namlen, ino_t *ino, unsigned char *d_type);
-extern int union_copyup(struct nameidata *, struct path *);
-extern int __union_copyup(struct nameidata *, struct path *);
-extern int union_copyup_len(struct nameidata *, struct path *, size_t len);
 extern int union_copyup_file(struct nameidata *nd, struct path *lower,
 			     struct dentry *dentry, size_t len);
+extern int do_union_copyup_len(struct nameidata *nd, struct path *path,
+			       bool copy_all, size_t len);
 
 static inline
 struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
@@ -161,29 +160,34 @@ int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
 	return 0;
 }
 
-static inline int union_copyup(struct nameidata *nd, struct path *path)
-{
-	BUG();
-	return 0;
-}
-
-static inline int __union_copyup(struct nameidata *nd, struct path *path)
-{
-	BUG();
-	return 0;
-}
-
-static inline int union_copyup_len(struct nameidata *nd, struct path *path,
-				   size_t len)
-{
-	BUG();
-	return 0;
-}
-
 static inline int union_copyup_file(struct nameidata *nd, struct path *lower,
 				    struct dentry *dentry, size_t len)
 {
 	return 0;
 }
 
+static inline int do_union_copyup_len(struct nameidata *nd, struct path *path,
+				      bool copy_all, size_t len)
+{
+	return 0;
+}
+
 #endif	/* CONFIG_UNION_MOUNT */
+
+#if 0
+/*
+ * Helper function to copy up all of a file
+ */
+static inline int union_copyup(struct nameidata *nd, struct path *path)
+{
+	return do_union_copyup_len(nd, path, true, 0);
+}
+
+/*
+ * Helper function to copy up part of a file for truncate and O_TRUNC.
+ */
+static inline int union_copyup_len(struct nameidata *nd, struct path *path, size_t len)
+{
+	return do_union_copyup_len(nd, path, false, len);
+}
+#endif

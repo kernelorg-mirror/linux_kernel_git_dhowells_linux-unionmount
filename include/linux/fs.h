@@ -2092,7 +2092,8 @@ extern int filp_close(struct file *, fl_owner_t id);
 extern char * getname(const char __user *);
 enum {
 	FILE_CREATED = 1,
-	FILE_OPENED = 2
+	FILE_OPENED = 2,
+	FILE_COPIED_UP	= 0x00000004,
 };
 extern int finish_open(struct file *file, struct dentry *dentry,
 			int (*open)(struct inode *, struct file *),

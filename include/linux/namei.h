@@ -55,6 +55,7 @@ enum {LAST_NORM, LAST_ROOT, LAST_DOT, LAST_DOTDOT, LAST_BIND};
 #define LOOKUP_ROOT		0x2000
 #define LOOKUP_EMPTY		0x4000
 #define LOOKUP_COPY_UP		0x8000 /* Copy up from lower mount if unionmounted */
+#define LOOKUP_COPY_UP_TRUNC	0x10000 /* Copy up truncated to 0 (need file attributes) */
 
 extern int user_path_at(int, const char __user *, unsigned, struct path *);
 extern int user_path_at_empty(int, const char __user *, unsigned, struct path *, int *empty);

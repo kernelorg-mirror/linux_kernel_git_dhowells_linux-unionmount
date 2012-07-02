@@ -451,21 +451,19 @@ EXPORT_SYMBOL(generic_readdir_fallthru);
 
 /**
  * union_create_file
- * @nd: namediata for source file
+ * @parent: path of the upper parent directory
  * @lower: path of the source file
  * @new: path of the new file, negative dentry
  *
  * Must already have mnt_want_write() on the mnt and the parent's i_mutex.
  */
-static int union_create_file(struct nameidata *nd, struct path *lower,
+static int union_create_file(struct path *parent, struct path *lower,
 			     struct dentry *new)
 {
-	struct path *parent = &nd->path;
-
 	BUG_ON(!mutex_is_locked(&parent->dentry->d_inode->i_mutex));
 
 	return vfs_create(parent->dentry->d_inode, new,
-			  lower->dentry->d_inode->i_mode, nd);
+			  lower->dentry->d_inode->i_mode, true);
 }
 
 /**
@@ -572,7 +570,7 @@ int union_copyup_file(struct nameidata *nd, struct path *lower,
 	saved_cred = override_creds(override_cred);
 
 	if (S_ISREG(lower->dentry->d_inode->i_mode)) {
-		error = union_create_file(nd, lower, dentry);
+		error = union_create_file(&nd->path, lower, dentry);
 		if (error)
 			goto out;
 		error = union_copyup_data(lower, parent->mnt, dentry, len);
@@ -597,6 +595,7 @@ out:
 	return error;
 }
 
+#if 0
 /**
  * __union_copyup_len - Copy up a file and len bytes of data
  * @nd: nameidata for topmost parent dir
@@ -628,8 +627,10 @@ static int __union_copyup_len(struct nameidata *nd, struct path *path,
 		 * dir's i_mutex.  If we move it outside that, we'll need some
 		 * way of waiting for the data copyup to complete here.
 		 */
+		printk("- lost the race\n");
 		error = 0;
 	} else {
+		printk("- go copy!\n");
 		error = union_copyup_file(nd, path, dentry, len);
 		if (error < 0)
 			goto out_dput;
@@ -655,12 +656,13 @@ out_dput:
  * @len: if @copy_all is not set, number of bytes of file data to copy up
  *
  * Newly copied up path is returned in @path.
+ *
+ * The caller must hold a lock on the parent directory in the upper fs.
  */
-static int do_union_copyup_len(struct nameidata *nd, struct path *path,
-			       int copy_all, size_t len)
+int do_union_copyup_len(struct nameidata *nd, struct path *path,
+			bool copy_all, size_t len)
 {
 	struct path *parent = &nd->path;
-	int error;
 
 	if (!IS_DIR_UNIONED(parent->dentry) ||
 	    parent->mnt == path->mnt)
@@ -671,51 +673,17 @@ static int do_union_copyup_len(struct nameidata *nd, struct path *path,
 
 	BUG_ON(!S_ISDIR(parent->dentry->d_inode->i_mode));
 
-	mutex_lock(&parent->dentry->d_inode->i_mutex);
-	error = -ENOENT;
 	if (IS_DEADDIR(parent->dentry->d_inode))
-		goto out_unlock;
+		return -ENOENT;
 
 	if (copy_all && S_ISREG(path->dentry->d_inode->i_mode)) {
-		error = -EFBIG;
-		len = i_size_read(path->dentry->d_inode);
+		loff_t filesize = i_size_read(path->dentry->d_inode);
 		/* Check for overflow of file size */
-		if ((ssize_t)len != len)
-			goto out_unlock;
+		if ((ssize_t)filesize != filesize)
+			return -EFBIG;
+		len = filesize;
 	}
-
-	error = __union_copyup_len(nd, path, len);
-
-out_unlock:
-	mutex_unlock(&parent->dentry->d_inode->i_mutex);
-	return error;
-}
-
-/*
- * Helper function to copy up all of a file
- */
-int union_copyup(struct nameidata *nd, struct path *path)
-{
-	return do_union_copyup_len(nd, path, 1, 0);
-}
-
-/*
- * Unlocked helper function to copy up all of a file
- */
-int __union_copyup(struct nameidata *nd, struct path *path)
-{
-	loff_t len;
-	len = i_size_read(path->dentry->d_inode);
-	if ((ssize_t)len != len)
-		return -EFBIG;
 
 	return __union_copyup_len(nd, path, len);
 }
-
-/*
- * Helper function to copy up part of a file for truncate and O_TRUNC.
- */
-int union_copyup_len(struct nameidata *nd, struct path *path, size_t len)
-{
-	return do_union_copyup_len(nd, path, 0, len);
-}
+#endif
