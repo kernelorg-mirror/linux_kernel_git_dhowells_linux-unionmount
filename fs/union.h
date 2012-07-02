@@ -71,6 +71,8 @@ extern int union_add_dir(struct path *, struct path *, unsigned int);
 extern int union_create_topmost_dir(struct path *, struct qstr *, struct path *,
 				    struct path *);
 extern int union_copyup_dir(struct path *);
+extern int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
+				    int namlen, ino_t *ino, unsigned char *d_type);
 
 static inline
 struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
@@ -132,6 +134,14 @@ static inline bool needs_lookup_union(struct path *parent_path, struct path *pat
 }
 
 static inline int union_copyup_dir(struct path *topmost_path)
+{
+	BUG();
+	return 0;
+}
+
+static inline
+int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
+			     int namlen, ino_t *ino, unsigned char *d_type)
 {
 	BUG();
 	return 0;
