@@ -2075,6 +2075,11 @@ static int do_add_mount(struct mount *newmnt, struct path *path, int mnt_flags)
 	if (S_ISLNK(newmnt->mnt.mnt_root->d_inode->i_mode))
 		goto unlock;
 
+	/* Top layers of union mounts can't be mounted elsewhere */
+	err = -EBUSY;
+	if (newmnt->mnt.mnt_sb->s_union_lower_mnts)
+		goto unlock;
+
 	newmnt->mnt.mnt_flags = mnt_flags;
 	err = graft_tree(newmnt, path);
 
