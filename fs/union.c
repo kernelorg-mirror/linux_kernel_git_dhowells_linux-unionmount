@@ -556,28 +556,44 @@ int union_copyup_file(struct nameidata *nd, struct path *lower,
 		      struct dentry *dentry, size_t len)
 {
 	struct path *parent = &nd->path;
+	const struct cred *saved_cred;
+	struct cred *override_cred;
 	int error;
 
 	BUG_ON(!mutex_is_locked(&parent->dentry->d_inode->i_mutex));
 
+	override_cred = prepare_kernel_cred(NULL);
+	if (!override_cred)
+		return -ENOMEM;
+
+	override_cred->fsuid = lower->dentry->d_inode->i_uid;
+	override_cred->fsgid = lower->dentry->d_inode->i_gid;
+
+	saved_cred = override_creds(override_cred);
+
 	if (S_ISREG(lower->dentry->d_inode->i_mode)) {
 		error = union_create_file(nd, lower, dentry);
 		if (error)
-			return error;
+			goto out;
 		error = union_copyup_data(lower, parent->mnt, dentry, len);
 	} else if (S_ISLNK(lower->dentry->d_inode->i_mode)) {
-		return union_create_symlink(nd, lower, dentry);
+		error = union_create_symlink(nd, lower, dentry);
+		goto out;
 	} else {
 		/* Don't currently support copyup of special files, though in
 		 * theory there's no reason we couldn't at least copy up
 		 * blockdev, chrdev and FIFO files
 		 */
-		return -EXDEV;
+		error = -EXDEV;
+		goto out;
 	}
 	if (error)
 		/* Most likely error: ENOSPC */
 		vfs_unlink(parent->dentry->d_inode, dentry);
 
+out:
+	revert_creds(saved_cred);
+	put_cred(override_cred);
 	return error;
 }
 
