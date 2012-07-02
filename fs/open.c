@@ -517,7 +517,8 @@ SYSCALL_DEFINE3(fchmodat, int, dfd, const char __user *, filename, umode_t, mode
 	struct path path;
 	int error;
 
-	error = user_path_at(dfd, filename, LOOKUP_FOLLOW, &path);
+	error = user_path_at(dfd, filename, LOOKUP_FOLLOW | LOOKUP_COPY_UP,
+			     &path);
 	if (!error) {
 		error = chmod_common(&path, mode);
 		path_put(&path);
@@ -579,7 +580,7 @@ SYSCALL_DEFINE5(fchownat, int, dfd, const char __user *, filename, uid_t, user,
 	lookup_flags = (flag & AT_SYMLINK_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 	if (flag & AT_EMPTY_PATH)
 		lookup_flags |= LOOKUP_EMPTY;
-	error = user_path_at(dfd, filename, lookup_flags, &path);
+	error = user_path_at(dfd, filename, lookup_flags | LOOKUP_COPY_UP, &path);
 	if (error)
 		goto out;
 	error = mnt_want_write(path.mnt);
