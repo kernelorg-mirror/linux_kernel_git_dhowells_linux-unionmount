@@ -1829,6 +1829,12 @@ static int do_loopback(struct path *path, char *old_name,
 	if (IS_MNT_UNBINDABLE(old))
 		goto out2;
 
+	/* XXX - Mounting a subtree of a union mount elsewhere requires careful
+	 * thought and some refactoring.
+	 */
+	if (IS_MNT_UNION(old_path.mnt))
+		goto out2;
+
 	if (!check_mnt(real_mount(path->mnt)) || !check_mnt(old))
 		goto out2;
 
