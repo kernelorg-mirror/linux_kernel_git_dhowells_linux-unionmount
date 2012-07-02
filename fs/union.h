@@ -19,6 +19,7 @@
 #include <linux/mount.h>
 #include <linux/dcache.h>
 #include <linux/path.h>
+#include <linux/namei.h>
 #include <linux/bug.h>
 
 /*
@@ -73,6 +74,11 @@ extern int union_create_topmost_dir(struct path *, struct qstr *, struct path *,
 extern int union_copyup_dir(struct path *);
 extern int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
 				    int namlen, ino_t *ino, unsigned char *d_type);
+extern int union_copyup(struct nameidata *, struct path *);
+extern int __union_copyup(struct nameidata *, struct path *);
+extern int union_copyup_len(struct nameidata *, struct path *, size_t len);
+extern int union_copyup_file(struct nameidata *nd, struct path *lower,
+			     struct dentry *dentry, size_t len);
 
 static inline
 struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
@@ -144,6 +150,31 @@ int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
 			     int namlen, ino_t *ino, unsigned char *d_type)
 {
 	BUG();
+	return 0;
+}
+
+static inline int union_copyup(struct nameidata *nd, struct path *path)
+{
+	BUG();
+	return 0;
+}
+
+static inline int __union_copyup(struct nameidata *nd, struct path *path)
+{
+	BUG();
+	return 0;
+}
+
+static inline int union_copyup_len(struct nameidata *nd, struct path *path,
+				   size_t len)
+{
+	BUG();
+	return 0;
+}
+
+static inline int union_copyup_file(struct nameidata *nd, struct path *lower,
+				    struct dentry *dentry, size_t len)
+{
 	return 0;
 }
 
