@@ -770,6 +770,9 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 	list_add_tail(&mnt->mnt_instance, &sb->s_mounts);
 	br_write_unlock(&vfsmount_lock);
 
+	if ((flag & CL_MAKE_UNION))
+		mnt->mnt.mnt_flags |= MNT_UNION_LOWER;
+
 	if (flag & CL_SLAVE) {
 		list_add(&mnt->mnt_slave, &old->mnt_slave_list);
 		mnt->mnt_master = old;
@@ -1493,7 +1496,7 @@ static int clone_union_tree(struct mount *topmost, struct path *mntpnt)
 	cloned_tree = copy_tree(mnt, mnt->mnt.mnt_root,
 				CL_COPY_ALL | CL_PRIVATE |
 				CL_NO_SHARED | CL_NO_SLAVE |
-				CL_MAKE_HARD_READONLY);
+				CL_MAKE_HARD_READONLY | CL_MAKE_UNION);
 	if (IS_ERR(cloned_tree))
 		return PTR_ERR(cloned_tree);
 

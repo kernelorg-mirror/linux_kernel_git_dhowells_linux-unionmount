@@ -56,6 +56,11 @@ static inline bool IS_MNT_UNION(struct vfsmount *mnt)
 	return mnt->mnt_flags & MNT_UNION;
 }
 
+static inline bool IS_MNT_LOWER(struct vfsmount *mnt)
+{
+	return mnt->mnt_flags & MNT_UNION_LOWER;
+}
+
 static inline bool IS_DIR_UNIONED(struct dentry *dentry)
 {
 	return !!dentry->d_union_stack;
