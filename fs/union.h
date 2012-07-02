@@ -73,6 +73,26 @@ struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
 	return &dentry->d_union_stack->u_dirs[layer];
 }
 
+/*
+ * Determine whether we need to perform unionmount traversal or the copyup of a
+ * dentry.
+ */
+static inline
+bool needs_lookup_union(struct path *parent_path, struct path *path)
+{
+	if (!IS_DIR_UNIONED(parent_path->dentry))
+		return false;
+
+	/* Either already built or crossed a mountpoint to not-unioned mnt */
+	/* XXX are bind mounts root? think not */
+	if (IS_ROOT(path->dentry))
+		return false;
+
+	/* It's okay not to have the lock; will recheck in lookup_union() */
+	/* XXX set for root dentry at mount? */
+	return !(path->dentry->d_flags & DCACHE_UNION_LOOKUP_DONE);
+}
+
 #else /* CONFIG_UNION_MOUNT */
 
 static inline
@@ -98,6 +118,11 @@ static inline int union_create_topmost_dir(struct path *parent, struct qstr *nam
 {
 	BUG();
 	return 0;
+}
+
+static inline bool needs_lookup_union(struct path *parent_path, struct path *path)
+{
+	return false;
 }
 
 #endif	/* CONFIG_UNION_MOUNT */
