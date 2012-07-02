@@ -51,6 +51,11 @@ struct union_stack {
 	struct path u_dirs[0];
 };
 
+static inline bool IS_MNT_UNION(struct vfsmount *mnt)
+{
+	return mnt->mnt_flags & MNT_UNION;
+}
+
 static inline bool IS_DIR_UNIONED(struct dentry *dentry)
 {
 	return !!dentry->d_union_stack;
@@ -77,6 +82,7 @@ struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
 	return NULL;
 }
 
+static inline bool IS_MNT_UNION(struct vfsmount *mnt) { return false; }
 static inline bool IS_DIR_UNIONED(struct dentry *dentry) { return false; }
 static inline void d_free_unions(struct dentry *dentry) {}
 
