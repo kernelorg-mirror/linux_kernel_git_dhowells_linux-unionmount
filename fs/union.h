@@ -92,7 +92,8 @@ struct path *union_find_dir(struct dentry *dentry, unsigned int layer)
  * dentry.
  */
 static inline
-bool needs_lookup_union(struct path *parent_path, struct path *path)
+bool needs_lookup_union(struct nameidata *nd,
+			struct path *parent_path, struct path *path)
 {
 	if (!IS_DIR_UNIONED(parent_path->dentry))
 		return false;
@@ -101,6 +102,12 @@ bool needs_lookup_union(struct path *parent_path, struct path *path)
 	/* XXX are bind mounts root? think not */
 	if (IS_ROOT(path->dentry))
 		return false;
+
+	/* If this is a fallthru dentry and the caller requires the underlying
+	 * inode to be copied up, then do so.
+	 */
+	if (nd->flags & LOOKUP_COPY_UP && d_is_fallthru(path->dentry))
+		return true;
 
 	/* It's okay not to have the lock; will recheck in lookup_union() */
 	/* XXX set for root dentry at mount? */
@@ -134,7 +141,8 @@ static inline int union_create_topmost_dir(struct path *parent, struct qstr *nam
 	return 0;
 }
 
-static inline bool needs_lookup_union(struct path *parent_path, struct path *path)
+static inline bool needs_lookup_union(struct nameidata *nd,
+				      struct path *parent_path, struct path *path)
 {
 	return false;
 }

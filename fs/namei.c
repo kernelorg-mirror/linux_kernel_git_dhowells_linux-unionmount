@@ -1198,6 +1198,16 @@ static int __lookup_union(struct nameidata *nd, struct qstr *name,
 	return 0;
 
 out_found_file:
+	/* If the caller demands a top-level dentry then we have to copy up. */
+	if (nd->flags & LOOKUP_COPY_UP) {
+		nd->path = parent;
+		err = union_copyup_file(nd, &lower, topmost->dentry,
+					i_size_read(lower.dentry->d_inode));
+		if (err)
+			goto out_err;
+		goto out_lookup_done;
+	}
+
 	/* Swap out the positive lower dentry with the negative upper
 	 * dentry for this file.  Note that the matching mntput() is done
 	 * in link_path_walk().
@@ -1333,6 +1343,15 @@ static bool lookup_union_rcu(struct nameidata *nd,
 	if (d_is_whiteout(dentry) ||
 	    (IS_OPAQUE(parent_inode) && !d_is_fallthru(dentry)))
 		return true;
+
+	/* The dentry is a fallthru in an opaque unioned directory.
+	 *
+	 * If the caller demands that the terminal dentry be instantiated in
+	 * the top layer of the union (copied up) immediately, that will
+	 * require a mutex.
+	 */
+	if (nd->flags & LOOKUP_COPY_UP)
+		return false;
 
 	/* At this point we have a negative dentry in the unionmount that may
 	 * be overlaying a non-directory file in a lower filesystem, so we loop
@@ -1584,7 +1603,7 @@ unlazy:
 	if (err)
 		nd->flags |= LOOKUP_JUMPED;
 
-	if (needs_lookup_union(&nd->path, path)) {
+	if (needs_lookup_union(nd, &nd->path, path)) {
 		int err = lookup_union(nd, name, path);
 		if (err < 0)
 			return err;
@@ -2272,7 +2291,7 @@ static int lookup_hash(struct nameidata *nd, struct qstr *name,
 	path->mnt = nd->path.mnt;
 	path->dentry = result;
 
-	if (needs_lookup_union(&nd->path, path))
+	if (needs_lookup_union(nd, &nd->path, path))
 		return lookup_union_locked(nd, name, path);
 	return 0;
 }
