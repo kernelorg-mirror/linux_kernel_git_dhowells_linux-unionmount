@@ -32,6 +32,7 @@
 #include <linux/dnotify.h>
 
 #include "internal.h"
+#include "union.h"
 
 int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
 	struct file *filp)
@@ -301,7 +302,11 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	const struct cred *old_cred;
 	struct cred *override_cred;
 	struct path path;
+	struct nameidata nd;
+	struct vfsmount *mnt;
 	struct inode *inode;
+	umode_t i_mode;
+	char *tmp;
 	int res;
 
 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
@@ -326,25 +331,47 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 
 	old_cred = override_creds(override_cred);
 
-	res = user_path_at(dfd, filename, LOOKUP_FOLLOW, &path);
+	res = user_path_nd(dfd, filename, LOOKUP_FOLLOW, &nd, &path, &tmp);
 	if (res)
 		goto out;
 
-	inode = path.dentry->d_inode;
+	/* For union mounts, use the topmost mnt's permissions */
+	mnt = path.mnt;
+	if (IS_MNT_LOWER(mnt))
+		mnt = nd.path.mnt;
 
-	if ((mode & MAY_EXEC) && S_ISREG(inode->i_mode)) {
+	inode = path.dentry->d_inode;
+	i_mode = inode->i_mode;
+
+	if ((mode & MAY_EXEC) && S_ISREG(i_mode)) {
 		/*
 		 * MAY_EXEC on regular files is denied if the fs is mounted
 		 * with the "noexec" flag.
 		 */
 		res = -EACCES;
-		if (path.mnt->mnt_flags & MNT_NOEXEC)
+		if (mnt->mnt_flags & MNT_NOEXEC)
 			goto out_path_release;
 	}
 
-	res = inode_permission(inode, mode | MAY_ACCESS);
+	mode |= MAY_ACCESS;
+	if ((mode & MAY_WRITE) && unlikely(IS_MNT_LOWER(path.mnt))) {
+		/* If we need to copy up, then the upperfs of a union must be
+		 * writable.  The lowerfs must be mounted read-only for the
+		 * union to exist, but we don't care about that.
+		 */
+		res = -EROFS;
+		if ((mnt->mnt_sb->s_flags & MS_RDONLY) &&
+		    (S_ISREG(i_mode) || S_ISDIR(i_mode) || S_ISLNK(i_mode)))
+			goto out_path_release;
+
+		/* We do need write permission on the lower inode, however */
+		res = __inode_permission(inode, mode);
+	} else {
+		res = inode_permission(inode, mode);
+	}
+
 	/* SuS v2 requires we report a read only fs too */
-	if (res || !(mode & S_IWOTH) || special_file(inode->i_mode))
+	if (res || !(mode & MAY_WRITE) || special_file(inode->i_mode))
 		goto out_path_release;
 	/*
 	 * This is a rare case where using __mnt_is_readonly()
@@ -356,11 +383,13 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	 * inherently racy and know that the fs may change
 	 * state before we even see this result.
 	 */
-	if (__mnt_is_readonly(path.mnt))
+	if (__mnt_is_readonly(mnt))
 		res = -EROFS;
 
 out_path_release:
 	path_put(&path);
+	path_put(&nd.path);
+	putname(tmp);
 out:
 	revert_creds(old_cred);
 	put_cred(override_cred);
