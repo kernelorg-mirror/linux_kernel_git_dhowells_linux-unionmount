@@ -595,7 +595,7 @@ out:
 	return error;
 }
 
-#if 0
+#if 1
 /**
  * __union_copyup_len - Copy up a file and len bytes of data
  * @nd: nameidata for topmost parent dir

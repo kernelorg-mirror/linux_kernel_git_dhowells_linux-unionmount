@@ -182,6 +182,7 @@ static inline int union_copyup(struct nameidata *nd, struct path *path)
 {
 	return do_union_copyup_len(nd, path, true, 0);
 }
+#endif
 
 /*
  * Helper function to copy up part of a file for truncate and O_TRUNC.
@@ -190,4 +191,3 @@ static inline int union_copyup_len(struct nameidata *nd, struct path *path, size
 {
 	return do_union_copyup_len(nd, path, false, len);
 }
-#endif

@@ -1237,7 +1237,8 @@ out_found_lower_file:
 			goto out_err;
 	}
 
-	if (nd->flags & (LOOKUP_COPY_UP_TRUNC | LOOKUP_OPEN | LOOKUP_CREATE)) {
+	if (nd->flags & (LOOKUP_COPY_UP_TRUNC | LOOKUP_OPEN | LOOKUP_CREATE |
+			 LOOKUP_FOR_TRUNCATE)) {
 		err = __inode_permission(lower.dentry->d_inode, MAY_WRITE);
 		if (err < 0)
 			goto out_err;
