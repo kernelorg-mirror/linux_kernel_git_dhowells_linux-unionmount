@@ -107,6 +107,8 @@ bool needs_lookup_union(struct nameidata *nd,
 }
 
 extern int union_copyup_dir(struct path *);
+extern int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
+				    int namlen, ino_t *ino, unsigned char *d_type);
 
 #else /* CONFIG_UNION_MOUNT */
 
@@ -141,6 +143,14 @@ static inline bool needs_lookup_union(struct nameidata *nd,
 }
 
 static inline int union_copyup_dir(struct path *topmost_path)
+{
+	BUG();
+	return 0;
+}
+
+static inline
+int generic_readdir_fallthru(struct dentry *topmost_dentry, const char *name,
+			     int namlen, ino_t *ino, unsigned char *d_type)
 {
 	BUG();
 	return 0;
