@@ -371,7 +371,8 @@ SYSCALL_DEFINE5(setxattr, const char __user *, pathname,
 	struct path path;
 	int error;
 
-	error = user_path(pathname, &path);
+	error = user_path_at(AT_FDCWD, pathname, LOOKUP_FOLLOW | LOOKUP_COPY_UP,
+			     &path);
 	if (error)
 		return error;
 	error = mnt_want_write(path.mnt);
@@ -390,7 +391,7 @@ SYSCALL_DEFINE5(lsetxattr, const char __user *, pathname,
 	struct path path;
 	int error;
 
-	error = user_lpath(pathname, &path);
+	error = user_path_at(AT_FDCWD, pathname, LOOKUP_COPY_UP, &path);
 	if (error)
 		return error;
 	error = mnt_want_write(path.mnt);
@@ -616,7 +617,8 @@ SYSCALL_DEFINE2(removexattr, const char __user *, pathname,
 	struct path path;
 	int error;
 
-	error = user_path(pathname, &path);
+	error = user_path_at(AT_FDCWD, pathname, LOOKUP_FOLLOW | LOOKUP_COPY_UP,
+			     &path);
 	if (error)
 		return error;
 	error = mnt_want_write(path.mnt);
@@ -634,7 +636,7 @@ SYSCALL_DEFINE2(lremovexattr, const char __user *, pathname,
 	struct path path;
 	int error;
 
-	error = user_lpath(pathname, &path);
+	error = user_path_at(AT_FDCWD, pathname, LOOKUP_COPY_UP, &path);
 	if (error)
 		return error;
 	error = mnt_want_write(path.mnt);
