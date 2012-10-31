@@ -64,7 +64,8 @@ int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
 
 static long do_sys_truncate(const char __user *pathname, loff_t length)
 {
-	struct path path;
+	struct path parent, path;
+	struct vfsmount *mnt;
 	struct inode *inode;
 	int error;
 
@@ -72,7 +73,7 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
 	if (length < 0)	/* sorry, but loff_t says... */
 		goto out;
 
-	error = user_path(pathname, &path);
+	error = user_path_and_parent(AT_FDCWD, pathname, 0, &parent, &path);
 	if (error)
 		goto out;
 	inode = path.dentry->d_inode;
@@ -86,18 +87,50 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
 	if (!S_ISREG(inode->i_mode))
 		goto dput_and_out;
 
-	error = mnt_want_write(path.mnt);
+	/* If we're looking at the lower layer of a union mount, then we need
+	 * to create the file on the upperfs and truncate that.
+	 */
+	if (IS_MNT_LOWER(path.mnt) && parent.mnt)
+		mnt = parent.mnt;
+	else
+		mnt = path.mnt;
+
+	error = mnt_want_write(mnt);
 	if (error)
 		goto dput_and_out;
 
-	error = inode_permission(inode, MAY_WRITE);
-	if (error)
-		goto mnt_drop_write_and_out;
+	if (unlikely(IS_MNT_UNION(mnt))) {
+		/* We have to be able to write to the upperfs. */
+		error = -EROFS;
+		if (mnt->mnt_sb->s_flags & MS_RDONLY)
+			goto mnt_drop_write_and_out;
+
+		/* But the lowerfs inode must offer write permission - if the
+		 * lowerfs was mounted writably. */
+		error = __inode_permission(inode, MAY_WRITE);
+		if (error)
+			goto mnt_drop_write_and_out;
+	} else {
+		error = inode_permission(inode, MAY_WRITE);
+		if (error)
+			goto mnt_drop_write_and_out;
+	}
 
 	error = -EPERM;
 	if (IS_APPEND(inode))
 		goto mnt_drop_write_and_out;
 
+	if (IS_MNT_LOWER(path.mnt)) {
+		mutex_lock(&parent.dentry->d_inode->i_mutex);
+		error = union_copyup(&parent, &path, false, length);
+		mutex_unlock(&parent.dentry->d_inode->i_mutex);
+		if (error)
+			goto mnt_drop_write_and_out;
+		mntget(path.mnt);
+	}
+
+	/* path may have changed after copyup */
+	inode = path.dentry->d_inode;
 	error = get_write_access(inode);
 	if (error)
 		goto mnt_drop_write_and_out;
@@ -119,9 +152,10 @@ static long do_sys_truncate(const char __user *pathname, loff_t length)
 put_write_and_out:
 	put_write_access(inode);
 mnt_drop_write_and_out:
-	mnt_drop_write(path.mnt);
+	mnt_drop_write(mnt);
 dput_and_out:
 	path_put(&path);
+	path_put(&parent);
 out:
 	return error;
 }
