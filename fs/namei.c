@@ -2260,7 +2260,6 @@ static int may_delete(struct inode *dir,struct dentry *victim,int isdir)
 	if (!victim->d_inode)
 		return -ENOENT;
 
-	BUG_ON(victim->d_parent->d_inode != dir);
 	audit_inode_child(dir, victim, AUDIT_TYPE_CHILD_DELETE);
 
 	error = inode_permission(dir, MAY_WRITE | MAY_EXEC);
@@ -3269,6 +3268,92 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, umode_t, mode)
 SYSCALL_DEFINE2(mkdir, const char __user *, pathname, umode_t, mode)
 {
 	return sys_mkdirat(AT_FDCWD, pathname, mode);
+}
+
+/**
+ * vfs_whiteout: Create a whiteout for the given directory entry
+ * @parent: Parent directory
+ * @dentry: Directory entry to whiteout
+ *
+ * Create a whiteout for the given directory entry.  A whiteout prevents lookup
+ * from dropping down to a lower layer of a union mounted file system.
+ *
+ * There are two important cases: (a) The directory entry to be whited-out may
+ * already exist, in which case it must first be deleted before we create the
+ * whiteout, and (b) no such directory entry exists and we only have to create
+ * the whiteout itself.
+ *
+ * The caller must pass in a dentry for the directory entry to be whited-out -
+ * a positive one if it exists, and a negative if not.  When this function
+ * returns, the caller should dput() the old, now defunct dentry it passed in.
+ * The dentry for the whiteout itself is created inside this function.
+ *
+ * The caller must hold the i_mutex lock on the parent directory.
+ */
+static int vfs_whiteout(struct dentry *parent, struct dentry *old_dentry, int isdir)
+{
+	struct inode *dir = parent->d_inode, *old_inode = old_dentry->d_inode;
+	struct dentry *whiteout;
+	bool do_dput = false;
+	int err = 0;
+
+	BUG_ON(old_dentry->d_parent != parent);
+
+	if (!dir->i_op || !dir->i_op->whiteout)
+		return -EOPNOTSUPP;
+
+	/* If the old dentry is positive, then we have to delete this entry
+	 * before we create the whiteout.  The file system ->whiteout() op does
+	 * the actual delete, but we do all the VFS-level checks and changes
+	 * here.
+	 */
+	if (old_inode) {
+		mutex_lock(&old_inode->i_mutex);
+		if (d_mountpoint(old_dentry)) {
+			mutex_unlock(&old_inode->i_mutex);
+			return -EBUSY;
+		}
+		if (isdir)
+			err = security_inode_rmdir(dir, old_dentry);
+		else
+			err = security_inode_unlink(dir, old_dentry);
+		if (err)
+			goto error_unlock;
+	}
+
+	err = -ENOMEM;
+	whiteout = d_alloc(parent, &old_dentry->d_name);
+	if (!whiteout)
+		goto error_unlock;
+
+	if (old_inode && isdir) {
+		dentry_unhash(old_dentry);
+		do_dput = true;
+	}
+
+	err = dir->i_op->whiteout(dir, old_dentry, whiteout);
+	if (err)
+		goto error_put_whiteout;
+
+	if (old_inode) {
+		mutex_unlock(&old_inode->i_mutex);
+		fsnotify_link_count(old_inode);
+		d_delete(old_dentry);
+		if (do_dput)
+			dput(old_dentry);
+	}
+
+	dput(whiteout);
+	return err;
+
+error_put_whiteout:
+	dput(whiteout);
+error_unlock:
+	if (old_inode)
+		mutex_unlock(&old_inode->i_mutex);
+	if (do_dput)
+		dput(old_dentry);
+	return err;
 }
 
 /*

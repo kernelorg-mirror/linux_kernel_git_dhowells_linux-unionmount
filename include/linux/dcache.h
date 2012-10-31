@@ -191,6 +191,7 @@ struct dentry_operations {
 #define DCACHE_CANT_MOUNT	0x0100
 #define DCACHE_GENOCIDE		0x0200
 #define DCACHE_SHRINK_LIST	0x0400
+#define DCACHE_WHITEOUT		0x0800	/* Stop lookup in a unioned file system */
 
 #define DCACHE_NFSFS_RENAMED	0x1000
      /* this dentry has been "silly renamed" and has to be deleted on the last
@@ -401,6 +402,11 @@ extern void dput(struct dentry *);
 static inline bool d_managed(struct dentry *dentry)
 {
 	return dentry->d_flags & DCACHE_MANAGED_DENTRY;
+}
+
+static inline int d_is_whiteout(struct dentry *dentry)
+{
+	return dentry->d_flags & DCACHE_WHITEOUT;
 }
 
 static inline bool d_mountpoint(struct dentry *dentry)
