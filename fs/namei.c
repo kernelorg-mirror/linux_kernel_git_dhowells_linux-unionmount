@@ -1763,6 +1763,13 @@ unlazy:
 	}
 	if (err)
 		nd->flags |= LOOKUP_JUMPED;
+
+	if (needs_lookup_union(nd, &nd->path, path)) {
+		int err = lookup_union(nd, name, path);
+		if (err < 0)
+			return err;
+	}
+
 	*inode = path->dentry->d_inode;
 	return 0;
 
@@ -1794,6 +1801,13 @@ static int lookup_slow(struct nameidata *nd, struct qstr *name,
 	}
 	if (err)
 		nd->flags |= LOOKUP_JUMPED;
+	if (needs_lookup_union(nd, &nd->path, path)) {
+		err = lookup_union(nd, name, path);
+		if (err < 0) {
+			path_put_conditional(path, nd);
+			return err;
+		}
+	}
 	return 0;
 }
 
@@ -2443,8 +2457,12 @@ static int lookup_hash(struct nameidata *nd, struct qstr *name,
 		path->dentry = NULL;
 		return PTR_ERR(result);
 	}
+
 	path->mnt = nd->path.mnt;
 	path->dentry = result;
+
+	if (needs_lookup_union(nd, &nd->path, path))
+		return lookup_union_locked(nd, name, path);
 	return 0;
 }
 
