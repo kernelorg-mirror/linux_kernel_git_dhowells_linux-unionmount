@@ -827,6 +827,9 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 	list_add_tail(&mnt->mnt_instance, &sb->s_mounts);
 	br_write_unlock(&vfsmount_lock);
 
+	if ((flag & CL_MAKE_UNION))
+		mnt->mnt.mnt_flags |= MNT_UNION_LOWER;
+
 	if (flag & CL_SLAVE) {
 		list_add(&mnt->mnt_slave, &old->mnt_slave_list);
 		mnt->mnt_master = old;
