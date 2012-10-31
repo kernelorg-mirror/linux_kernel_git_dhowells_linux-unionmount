@@ -1870,14 +1870,17 @@ static int do_loopback(struct path *path, const char *old_name,
 				int recurse)
 {
 	LIST_HEAD(umount_list);
-	struct path old_path;
+	struct path old_parent, old_path;
 	struct mount *mnt = NULL, *old;
 	int err = mount_is_safe(path);
 	if (err)
 		return err;
 	if (!old_name || !*old_name)
 		return -EINVAL;
-	err = kern_path(old_name, LOOKUP_FOLLOW|LOOKUP_AUTOMOUNT, &old_path);
+
+	err = __user_path_and_parent(AT_FDCWD, old_name,
+				     LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT,
+				     &old_parent, &old_path);
 	if (err)
 		return err;
 
@@ -1890,6 +1893,25 @@ static int do_loopback(struct path *path, const char *old_name,
 	err = -EINVAL;
 	if (IS_MNT_UNBINDABLE(old))
 		goto out2;
+
+	if (IS_MNT_LOWER(old_path.mnt)) {
+		/* If we're bind-mounting a file that's on a lower fs in a
+		 * union then we must first copy the file up as the copied
+		 * mount stack attached to the superblock is independent of any
+		 * namespace and will fail the check_mnt() test.  Directories
+		 * are copied up during the pathwalk, so we need not worry
+		 * about those.
+		 */
+		if (!old_parent.mnt)
+			goto out2;
+		mutex_lock(&old_parent.dentry->d_inode->i_mutex);
+		err = union_copyup(&old_parent, &old_path, true, 0);
+		mutex_unlock(&old_parent.dentry->d_inode->i_mutex);
+		if (err)
+			goto out2;
+		mntget(old_path.mnt);
+		old = real_mount(old_path.mnt);
+	}
 
 	if (!check_mnt(real_mount(path->mnt)) || !check_mnt(old))
 		goto out2;
@@ -1915,6 +1937,7 @@ out2:
 	release_mounts(&umount_list);
 out:
 	path_put(&old_path);
+	path_put(&old_parent);
 	return err;
 }
 
@@ -2115,6 +2138,7 @@ do_kern_mount(const char *fstype, int flags, const char *name, void *data)
  */
 static int do_add_mount(struct mount *newmnt, struct path *path, int mnt_flags)
 {
+	bool unioned = false;
 	int err;
 
 	mnt_flags &= ~(MNT_SHARED | MNT_WRITE_HOLD | MNT_INTERNAL);
@@ -2144,7 +2168,16 @@ static int do_add_mount(struct mount *newmnt, struct path *path, int mnt_flags)
 		goto unlock;
 
 	newmnt->mnt.mnt_flags = mnt_flags;
+
+	if (IS_MNT_UNION(&newmnt->mnt)) {
+		err = prepare_mnt_union(newmnt, path);
+		if (err)
+			return err;
+		unioned = true;
+	}
 	err = graft_tree(newmnt, path);
+	if (err < 0 && unioned)
+		cleanup_mnt_union(newmnt);
 
 unlock:
 	unlock_mount(path);
