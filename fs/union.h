@@ -106,6 +106,8 @@ bool needs_lookup_union(struct nameidata *nd,
 	return !(path->dentry->d_flags & DCACHE_UNION_LOOKUP_DONE);
 }
 
+extern int union_copyup_dir(struct path *);
+
 #else /* CONFIG_UNION_MOUNT */
 
 static inline bool IS_MNT_UNION(struct vfsmount *mnt) { return false; }
@@ -136,6 +138,12 @@ static inline bool needs_lookup_union(struct nameidata *nd,
 				      struct path *parent_path, struct path *path)
 {
 	return false;
+}
+
+static inline int union_copyup_dir(struct path *topmost_path)
+{
+	BUG();
+	return 0;
 }
 
 #endif	/* CONFIG_UNION_MOUNT */
