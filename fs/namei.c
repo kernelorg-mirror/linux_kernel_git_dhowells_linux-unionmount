@@ -4172,11 +4172,6 @@ static long do_unlinkat(int dfd, const char __user *pathname)
 	if (nd.last_type != LAST_NORM)
 		goto exit1;
 
-	/* unlink() on union mounts not implemented yet */
-	error = -EINVAL;
-	if (IS_DIR_UNIONED(nd.path.dentry))
-		goto exit1;
-
 	nd.flags &= ~LOOKUP_PARENT;
 	error = mnt_want_write(nd.path.mnt);
 	if (error)
@@ -4195,6 +4190,10 @@ static long do_unlinkat(int dfd, const char __user *pathname)
 		error = security_path_unlink(&nd.path, path.dentry);
 		if (error)
 			goto exit2;
+		if (IS_DIR_UNIONED(nd.path.dentry)) {
+			error = do_whiteout(&nd, &path, 0);
+			goto exit2;
+		}
 		error = vfs_unlink(nd.path.dentry->d_inode, path.dentry);
 exit2:
 		path_put_conditional(&path, &nd);
