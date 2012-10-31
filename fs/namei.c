@@ -39,6 +39,7 @@
 
 #include "internal.h"
 #include "mount.h"
+#include "union.h"
 
 /* [Feb-1997 T. Schoebel-Theuer]
  * Fundamental changes in the pathname lookup mechanisms (namei)
@@ -3725,6 +3726,11 @@ static long do_rmdir(int dfd, const char __user *pathname)
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
+	/* rmdir() on union mounts not implemented yet */
+	error = -EINVAL;
+	if (IS_DIR_UNIONED(nd.path.dentry))
+		goto exit1;
+
 	switch(nd.last_type) {
 	case LAST_DOTDOT:
 		error = -ENOTEMPTY;
@@ -3822,6 +3828,11 @@ static long do_unlinkat(int dfd, const char __user *pathname)
 
 	error = -EISDIR;
 	if (nd.last_type != LAST_NORM)
+		goto exit1;
+
+	/* unlink() on union mounts not implemented yet */
+	error = -EINVAL;
+	if (IS_DIR_UNIONED(nd.path.dentry))
 		goto exit1;
 
 	nd.flags &= ~LOOKUP_PARENT;
@@ -4214,6 +4225,12 @@ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
 
 	error = -EXDEV;
 	if (oldnd.path.mnt != newnd.path.mnt)
+		goto exit2;
+
+	/* rename() on union mounts not implemented yet */
+	error = -EXDEV;
+	if (IS_DIR_UNIONED(oldnd.path.dentry) ||
+	    IS_DIR_UNIONED(newnd.path.dentry))
 		goto exit2;
 
 	old_dir = oldnd.path.dentry;
